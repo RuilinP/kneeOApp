@@ -26,7 +26,7 @@
   <h2>Knee Angle (Right Leg, MoveNet)</h2>
   <div id="info">
     Sit or stand sideways to the camera so your <b>right</b> leg is visible.<br/>
-    The angle at your knee will be shown below.
+    Try to fill most of the frame with your body, with good lighting and a plain background.
   </div>
 
   <video id="video" playsinline></video>
@@ -49,28 +49,40 @@
     let detector = null;
     let currentPose = null;
 
-    // simple smoothing
+    // smoothing for angle
     let smoothedAngle = null;
     const SMOOTHING_ALPHA = 0.3;
 
+    // store last good keypoints to bridge short dropouts
     let lastGood = {
-        right_hip: null,
-        right_knee: null,
-        right_ankle: null,
-        timestamp: 0
+      right_hip: null,
+      right_knee: null,
+      right_ankle: null,
+      timestamp: 0
     };
-const MAX_GAP_SEC = 0.3;
+    const MAX_GAP_SEC = 0.3;  // reuse last good for up to 0.3 s
 
     async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // prefer back camera; fall back to any camera
+      const primaryConstraints = {
         video: {
-          facingMode: "user",        // use "environment" for back camera
+          facingMode: "environment",
           width: { ideal: 480 },
           height: { ideal: 360 }
         },
         audio: false
-      });
-      video.srcObject = stream;
+      };
+      const fallbackConstraints = { video: true, audio: false };
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(primaryConstraints);
+        video.srcObject = stream;
+      } catch (e) {
+        console.warn("Primary camera failed, using fallback:", e);
+        const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+        video.srcObject = stream;
+      }
+
       return new Promise((resolve) => {
         video.onloadedmetadata = () => {
           video.play();
@@ -86,29 +98,21 @@ const MAX_GAP_SEC = 0.3;
       return kp;
     }
 
+    // Reuse last good location if current frame is missing but gap is short
     function getStableKeypoint(pose, name, nowSec, minScore = 0.3) {
-  // normal detection
-  const direct = getKeypoint(pose, name, minScore);
-
-  if (direct) {
-    // store the latest valid keypoint
-    lastGood[name] = { x: direct.x, y: direct.y, score: direct.score };
-    lastGood.timestamp = nowSec;
-    return direct;
-  }
-
-  // fallback: if last good exists and dropout is short, reuse it
-  if (lastGood[name] && (nowSec - lastGood.timestamp) <= MAX_GAP_SEC) {
-    return lastGood[name];
-  }
-
-  // too long missing ⇒ return null
-  return null;
-}
-
+      const direct = getKeypoint(pose, name, minScore);
+      if (direct) {
+        lastGood[name] = { x: direct.x, y: direct.y, score: direct.score };
+        lastGood.timestamp = nowSec;
+        return direct;
+      }
+      if (lastGood[name] && (nowSec - lastGood.timestamp) <= MAX_GAP_SEC) {
+        return lastGood[name];
+      }
+      return null;
+    }
 
     function computeKneeAngle(hip, knee, ankle) {
-      // vectors hip->knee and ankle->knee
       const v1x = hip.x - knee.x;
       const v1y = hip.y - knee.y;
       const v2x = ankle.x - knee.x;
@@ -122,16 +126,15 @@ const MAX_GAP_SEC = 0.3;
       const cosTheta = dot / (mag1 * mag2);
       const clamped = Math.min(1, Math.max(-1, cosTheta));
       const angleRad = Math.acos(clamped);
-      return (angleRad * 180) / Math.PI; // degrees
+      return (angleRad * 180) / Math.PI;
     }
 
     function drawSkeleton(pose) {
       if (!pose) return;
       const kp = pose.keypoints;
 
-      // draw all keypoints
       kp.forEach(k => {
-        if (k.score > 0.5) {
+        if (k.score > 0.3) {
           ctx.beginPath();
           ctx.arc(k.x, k.y, 4, 0, 2 * Math.PI);
           ctx.fillStyle = "cyan";
@@ -139,10 +142,9 @@ const MAX_GAP_SEC = 0.3;
         }
       });
 
-      // highlight right leg
-      const rh = getKeypoint(pose, "right_hip");
-      const rk = getKeypoint(pose, "right_knee");
-      const ra = getKeypoint(pose, "right_ankle");
+      const rh = getKeypoint(pose, "right_hip", 0.3);
+      const rk = getKeypoint(pose, "right_knee", 0.3);
+      const ra = getKeypoint(pose, "right_ankle", 0.3);
 
       ctx.strokeStyle = "yellow";
       ctx.lineWidth = 3;
@@ -163,13 +165,12 @@ const MAX_GAP_SEC = 0.3;
     function updateAngleDisplay(pose) {
       const nowSec = performance.now() / 1000;
 
-const hip   = getStableKeypoint(pose, "right_hip",   nowSec);
-const knee  = getStableKeypoint(pose, "right_knee",  nowSec);
-const ankle = getStableKeypoint(pose, "right_ankle", nowSec);
-
+      const hip   = getStableKeypoint(pose, "right_hip",   nowSec);
+      const knee  = getStableKeypoint(pose, "right_knee",  nowSec);
+      const ankle = getStableKeypoint(pose, "right_ankle", nowSec);
 
       if (!hip || !knee || !ankle) {
-        angleDisplay.textContent = "Angle: --° (right leg not detected)";
+        angleDisplay.textContent = "Angle: --° (right leg not clearly detected)";
         return;
       }
 
@@ -188,7 +189,7 @@ const ankle = getStableKeypoint(pose, "right_ankle", nowSec);
 
     async function main() {
       await setupCamera();
-      canvas.width = video.videoWidth;
+      canvas.width  = video.videoWidth;
       canvas.height = video.videoHeight;
 
       await tf.setBackend("webgl");
