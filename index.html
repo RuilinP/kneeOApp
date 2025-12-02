@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>MoveNet Knee Angle Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+    h2 { margin-top: 12px; }
+    #info { font-size: 14px; text-align: center; margin: 4px 8px; }
+    video { display: none; }
+    canvas { border: 1px solid #444; max-width: 100vw; margin-top: 8px; }
+    #angleDisplay { margin-top: 8px; font-size: 18px; }
+  </style>
+</head>
+<body>
+  <h2>Knee Angle (Right Leg, MoveNet)</h2>
+  <div id="info">
+    Sit or stand sideways to the camera so your <b>right</b> leg is visible.<br/>
+    The angle at your knee will be shown below.
+  </div>
+
+  <video id="video" playsinline></video>
+  <canvas id="canvas"></canvas>
+  <div id="angleDisplay">Angle: --°</div>
+
+  <!-- TF.js core + WebGL backend -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.20.0/dist/tf-backend-webgl.min.js"></script>
+
+  <!-- Pose detection (MoveNet) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const angleDisplay = document.getElementById("angleDisplay");
+
+    let detector = null;
+    let currentPose = null;
+
+    // simple smoothing
+    let smoothedAngle = null;
+    const SMOOTHING_ALPHA = 0.3;
+
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",        // use "environment" for back camera
+          width: { ideal: 480 },
+          height: { ideal: 360 }
+        },
+        audio: false
+      });
+      video.srcObject = stream;
+      return new Promise((resolve) => {
+        video.onloadedmetadata = () => {
+          video.play();
+          resolve();
+        };
+      });
+    }
+
+    function getKeypoint(pose, name, minScore = 0.5) {
+      if (!pose || !pose.keypoints) return null;
+      const kp = pose.keypoints.find(k => k.name === name);
+      if (!kp || kp.score < minScore) return null;
+      return kp;
+    }
+
+    function computeKneeAngle(hip, knee, ankle) {
+      // vectors hip->knee and ankle->knee
+      const v1x = hip.x - knee.x;
+      const v1y = hip.y - knee.y;
+      const v2x = ankle.x - knee.x;
+      const v2y = ankle.y - knee.y;
+
+      const dot = v1x * v2x + v1y * v2y;
+      const mag1 = Math.hypot(v1x, v1y);
+      const mag2 = Math.hypot(v2x, v2y);
+      if (mag1 === 0 || mag2 === 0) return null;
+
+      const cosTheta = dot / (mag1 * mag2);
+      const clamped = Math.min(1, Math.max(-1, cosTheta));
+      const angleRad = Math.acos(clamped);
+      return (angleRad * 180) / Math.PI; // degrees
+    }
+
+    function drawSkeleton(pose) {
+      if (!pose) return;
+      const kp = pose.keypoints;
+
+      // draw all keypoints
+      kp.forEach(k => {
+        if (k.score > 0.5) {
+          ctx.beginPath();
+          ctx.arc(k.x, k.y, 4, 0, 2 * Math.PI);
+          ctx.fillStyle = "cyan";
+          ctx.fill();
+        }
+      });
+
+      // highlight right leg
+      const rh = getKeypoint(pose, "right_hip");
+      const rk = getKeypoint(pose, "right_knee");
+      const ra = getKeypoint(pose, "right_ankle");
+
+      ctx.strokeStyle = "yellow";
+      ctx.lineWidth = 3;
+      if (rh && rk) {
+        ctx.beginPath();
+        ctx.moveTo(rh.x, rh.y);
+        ctx.lineTo(rk.x, rk.y);
+        ctx.stroke();
+      }
+      if (rk && ra) {
+        ctx.beginPath();
+        ctx.moveTo(rk.x, rk.y);
+        ctx.lineTo(ra.x, ra.y);
+        ctx.stroke();
+      }
+    }
+
+    function updateAngleDisplay(pose) {
+      const hip = getKeypoint(pose, "right_hip");
+      const knee = getKeypoint(pose, "right_knee");
+      const ankle = getKeypoint(pose, "right_ankle");
+
+      if (!hip || !knee || !ankle) {
+        angleDisplay.textContent = "Angle: --° (right leg not detected)";
+        return;
+      }
+
+      let angle = computeKneeAngle(hip, knee, ankle);
+      if (angle == null || isNaN(angle)) {
+        angleDisplay.textContent = "Angle: --° (invalid)";
+        return;
+      }
+
+      if (smoothedAngle == null) smoothedAngle = angle;
+      smoothedAngle =
+        SMOOTHING_ALPHA * angle + (1 - SMOOTHING_ALPHA) * smoothedAngle;
+
+      angleDisplay.textContent = `Angle: ${smoothedAngle.toFixed(1)}°`;
+    }
+
+    async function main() {
+      await setupCamera();
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      await tf.setBackend("webgl");
+      await tf.ready();
+
+      const model = poseDetection.SupportedModels.MoveNet;
+      const detectorConfig = {
+        modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+        enableSmoothing: true
+      };
+      detector = await poseDetection.createDetector(model, detectorConfig);
+
+      async function renderLoop() {
+        const poses = await detector.estimatePoses(video, {
+          maxPoses: 1,
+          flipHorizontal: true
+        });
+        currentPose = poses[0] || null;
+
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        drawSkeleton(currentPose);
+        updateAngleDisplay(currentPose);
+
+        requestAnimationFrame(renderLoop);
+      }
+
+      renderLoop();
+    }
+
+    main().catch(err => {
+      console.error(err);
+      angleDisplay.textContent = "Error: " + err.message;
+    });
+  </script>
+</body>
+</html>
