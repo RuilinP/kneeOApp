@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>MoveNet Knee Angle Demo</title>
+  <title>MoveNet Knee Extension Coach</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -16,22 +16,58 @@
       min-height: 100vh;
     }
     h2 { margin-top: 12px; }
-    #info { font-size: 14px; text-align: center; margin: 4px 8px; }
+    #info {
+      font-size: 14px;
+      text-align: center;
+      margin: 4px 8px;
+    }
     video { display: none; }
-    canvas { border: 1px solid #444; max-width: 100vw; margin-top: 8px; }
+    canvas {
+      border: 1px solid #444;
+      max-width: 100vw;
+      margin-top: 8px;
+    }
     #angleDisplay { margin-top: 8px; font-size: 18px; }
+    #repInfo {
+      margin-top: 4px;
+      font-size: 16px;
+    }
+    #feedback {
+      margin-top: 6px;
+      font-size: 16px;
+      font-weight: 600;
+      padding: 8px 12px;
+      border-radius: 6px;
+      min-height: 32px;
+      text-align: center;
+    }
+    .ok {
+      background: rgba(0, 128, 0, 0.2);
+      border: 1px solid #0f0;
+    }
+    .warn {
+      background: rgba(200, 140, 0, 0.2);
+      border: 1px solid #ffb300;
+    }
+    .bad {
+      background: rgba(200, 0, 0, 0.2);
+      border: 1px solid #f33;
+    }
   </style>
 </head>
 <body>
-  <h2>Knee Angle (Right Leg, MoveNet)</h2>
+  <h2>Knee Extension Coach (Right Leg, MoveNet)</h2>
   <div id="info">
-    Sit or stand sideways to the camera so your <b>right</b> leg is visible.<br/>
-    Try to fill most of the frame with your body, with good lighting and a plain background.
+    Place your phone so the <b>back camera</b> faces you from the side.<br/>
+    Sit on a chair and extend your <b>right leg</b> from bent to straight and back.<br/>
+    The app will measure your knee angle and give feedback on each rep.
   </div>
 
   <video id="video" playsinline></video>
   <canvas id="canvas"></canvas>
   <div id="angleDisplay">Angle: --°</div>
+  <div id="repInfo">Reps: 0</div>
+  <div id="feedback"></div>
 
   <!-- TF.js core + WebGL backend -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
@@ -45,28 +81,53 @@
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     const angleDisplay = document.getElementById("angleDisplay");
+    const repInfo = document.getElementById("repInfo");
+    const feedbackEl = document.getElementById("feedback");
 
     let detector = null;
     let currentPose = null;
 
-    // smoothing for angle
+    // ---- smoothing for angle ----
     let smoothedAngle = null;
     const SMOOTHING_ALPHA = 0.3;
 
-    // store last good keypoints to bridge short dropouts
+    // ---- store last good keypoints to bridge short dropouts ----
     let lastGood = {
       right_hip: null,
       right_knee: null,
       right_ankle: null,
       timestamp: 0
     };
-    const MAX_GAP_SEC = 0.3;  // reuse last good for up to 0.3 s
+    const MAX_GAP_SEC = 0.3; // reuse last good keypoint up to 0.3 s
+
+    // ---- rep detection & feedback thresholds ----
+    const BENT_THRESHOLD = 110;      // <= this = bent
+    const STRAIGHT_TARGET = 165;     // desired max angle for full extension
+    const ANGLE_OK_MARGIN = 5;       // within 5° of target = perfect
+    const MIN_REP_TIME = 1.5;        // total rep time (s) bent→straight→bent
+    const MIN_PHASE_TIME = 0.6;      // min extend/flex duration (s)
+
+    // state machine: BENT -> EXTENDING -> FLEXING -> BENT
+    let state = "BENT";
+    let repCount = 0;
+
+    let repStartTime = null;
+    let extendStartTime = null;
+    let flexStartTime = null;
+    let maxAngleThisRep = null;
+
+    function setFeedback(text, level = "ok") {
+      feedbackEl.textContent = text;
+      feedbackEl.className = "";
+      if (level === "ok") feedbackEl.classList.add("ok");
+      if (level === "warn") feedbackEl.classList.add("warn");
+      if (level === "bad") feedbackEl.classList.add("bad");
+    }
 
     async function setupCamera() {
-      // prefer back camera; fall back to any camera
       const primaryConstraints = {
         video: {
-          facingMode: "environment",
+          facingMode: "environment", // back camera
           width: { ideal: 480 },
           height: { ideal: 360 }
         },
@@ -162,7 +223,7 @@
       }
     }
 
-    function updateAngleDisplay(pose) {
+    function updateLogic(pose) {
       const nowSec = performance.now() / 1000;
 
       const hip   = getStableKeypoint(pose, "right_hip",   nowSec);
@@ -180,11 +241,94 @@
         return;
       }
 
+      // smooth angle
       if (smoothedAngle == null) smoothedAngle = angle;
       smoothedAngle =
         SMOOTHING_ALPHA * angle + (1 - SMOOTHING_ALPHA) * smoothedAngle;
+      angle = smoothedAngle;
 
-      angleDisplay.textContent = `Angle: ${smoothedAngle.toFixed(1)}°`;
+      angleDisplay.textContent = `Angle: ${angle.toFixed(1)}°`;
+
+      // ---- rep state machine ----
+      switch (state) {
+        case "BENT":
+          if (angle <= BENT_THRESHOLD) {
+            // still comfortably bent
+            break;
+          }
+          // leaving bent → start extension
+          state = "EXTENDING";
+          repStartTime = nowSec;
+          extendStartTime = nowSec;
+          maxAngleThisRep = angle;
+          setFeedback("Extending... straighten your knee.", "ok");
+          break;
+
+        case "EXTENDING":
+          if (angle > maxAngleThisRep) {
+            maxAngleThisRep = angle;
+          }
+          // once angle stops increasing and starts decreasing, we assume we reached peak
+          if (angle < maxAngleThisRep - 1.0) { // small hysteresis
+            state = "FLEXING";
+            flexStartTime = nowSec;
+            // ROM feedback at the top
+            if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
+              setFeedback("Great extension! Now lower with control.", "ok");
+            } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
+              setFeedback("Almost straight. Try a bit more next time.", "warn");
+            } else {
+              setFeedback("Too shallow. Straighten your leg more.", "bad");
+            }
+          }
+          break;
+
+        case "FLEXING":
+          // back to bent region → rep completed
+          if (angle <= BENT_THRESHOLD) {
+            const repEndTime = nowSec;
+            const totalTime = repEndTime - (repStartTime || repEndTime);
+            const extendTime = (flexStartTime || repEndTime) - (extendStartTime || repStartTime || repEndTime);
+            const flexTime   = repEndTime - (flexStartTime || repEndTime);
+
+            repCount += 1;
+            repInfo.textContent = `Reps: ${repCount}`;
+
+            // speed feedback based on duration
+            if (totalTime < MIN_REP_TIME || extendTime < MIN_PHASE_TIME || flexTime < MIN_PHASE_TIME) {
+              setFeedback(
+                `Rep ${repCount}: Too fast. Slow down your movement.`,
+                "bad"
+              );
+            } else {
+              // combine with ROM evaluation
+              if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
+                setFeedback(
+                  `Rep ${repCount}: Nice rep! Good extension and control.`,
+                  "ok"
+                );
+              } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
+                setFeedback(
+                  `Rep ${repCount}: Control is good. Try to extend a bit further.`,
+                  "warn"
+                );
+              } else {
+                setFeedback(
+                  `Rep ${repCount}: Slow enough, but extend more before coming back.`,
+                  "warn"
+                );
+              }
+            }
+
+            // reset for next rep
+            state = "BENT";
+            repStartTime = null;
+            extendStartTime = null;
+            flexStartTime = null;
+            maxAngleThisRep = null;
+          }
+          break;
+      }
     }
 
     async function main() {
@@ -202,6 +346,8 @@
       };
       detector = await poseDetection.createDetector(model, detectorConfig);
 
+      setFeedback("Model ready. Sit sideways and start extending your right leg.", "ok");
+
       async function renderLoop() {
         const poses = await detector.estimatePoses(video, {
           maxPoses: 1,
@@ -211,7 +357,7 @@
 
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         drawSkeleton(currentPose);
-        updateAngleDisplay(currentPose);
+        updateLogic(currentPose);
 
         requestAnimationFrame(renderLoop);
       }
@@ -222,6 +368,7 @@
     main().catch(err => {
       console.error(err);
       angleDisplay.textContent = "Error: " + err.message;
+      setFeedback("Error: " + err.message, "bad");
     });
   </script>
 </body>
