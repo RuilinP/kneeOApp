@@ -56,7 +56,7 @@
     async function setupCamera() {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: "user",        // use "environment" for back camera
+          facingMode: "environment",        // use "environment" for back camera
           width: { ideal: 480 },
           height: { ideal: 360 }
         },
