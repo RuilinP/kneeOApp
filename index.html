@@ -104,8 +104,8 @@
     const BENT_THRESHOLD = 110;      // <= this = bent
     const STRAIGHT_TARGET = 165;     // desired max angle for full extension
     const ANGLE_OK_MARGIN = 5;       // within 5° of target = perfect
-    const MIN_REP_TIME = 1.5;        // total rep time (s) bent→straight→bent
-    const MIN_PHASE_TIME = 0.6;      // min extend/flex duration (s)
+    const MIN_REP_TIME = 5;        // total rep time (s) bent→straight→bent
+    const MIN_PHASE_TIME = 2;      // min extend/flex duration (s)
 
     // state machine: BENT -> EXTENDING -> FLEXING -> BENT
     let state = "BENT";
