@@ -53,10 +53,18 @@
     let smoothedAngle = null;
     const SMOOTHING_ALPHA = 0.3;
 
+    let lastGood = {
+        right_hip: null,
+        right_knee: null,
+        right_ankle: null,
+        timestamp: 0
+    };
+const MAX_GAP_SEC = 0.3;
+
     async function setupCamera() {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: "environment",        // use "environment" for back camera
+          facingMode: "user",        // use "environment" for back camera
           width: { ideal: 480 },
           height: { ideal: 360 }
         },
@@ -71,12 +79,33 @@
       });
     }
 
-    function getKeypoint(pose, name, minScore = 0.5) {
+    function getKeypoint(pose, name, minScore = 0.3) {
       if (!pose || !pose.keypoints) return null;
       const kp = pose.keypoints.find(k => k.name === name);
       if (!kp || kp.score < minScore) return null;
       return kp;
     }
+
+    function getStableKeypoint(pose, name, nowSec, minScore = 0.3) {
+  // normal detection
+  const direct = getKeypoint(pose, name, minScore);
+
+  if (direct) {
+    // store the latest valid keypoint
+    lastGood[name] = { x: direct.x, y: direct.y, score: direct.score };
+    lastGood.timestamp = nowSec;
+    return direct;
+  }
+
+  // fallback: if last good exists and dropout is short, reuse it
+  if (lastGood[name] && (nowSec - lastGood.timestamp) <= MAX_GAP_SEC) {
+    return lastGood[name];
+  }
+
+  // too long missing ⇒ return null
+  return null;
+}
+
 
     function computeKneeAngle(hip, knee, ankle) {
       // vectors hip->knee and ankle->knee
@@ -132,9 +161,12 @@
     }
 
     function updateAngleDisplay(pose) {
-      const hip = getKeypoint(pose, "right_hip");
-      const knee = getKeypoint(pose, "right_knee");
-      const ankle = getKeypoint(pose, "right_ankle");
+      const nowSec = performance.now() / 1000;
+
+const hip   = getStableKeypoint(pose, "right_hip",   nowSec);
+const knee  = getStableKeypoint(pose, "right_knee",  nowSec);
+const ankle = getStableKeypoint(pose, "right_ankle", nowSec);
+
 
       if (!hip || !knee || !ankle) {
         angleDisplay.textContent = "Angle: --° (right leg not detected)";
