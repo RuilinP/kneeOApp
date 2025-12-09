@@ -3,7 +3,8 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const angleDisplay = document.getElementById("angleDisplay");
 const repInfo = document.getElementById("repInfo");
-const feedbackEl = document.getElementById("feedback");
+const angleFeedbackEl = document.getElementById("angleFeedback");
+const speedFeedbackEl = document.getElementById("speedFeedback");
 
 let detector = null;
 let currentPose = null;
@@ -37,12 +38,20 @@ let extendStartTime = null;
 let flexStartTime = null;
 let maxAngleThisRep = null;
 
-function setFeedback(text, level = "ok") {
-  feedbackEl.textContent = text;
-  feedbackEl.className = "";
-  if (level === "ok") feedbackEl.classList.add("ok");
-  if (level === "warn") feedbackEl.classList.add("warn");
-  if (level === "bad") feedbackEl.classList.add("bad");
+function setAngleFeedback(text, level = "ok") {
+  angleFeedbackEl.textContent = text;
+  angleFeedbackEl.className = "";
+  if (level === "ok") angleFeedbackEl.classList.add("ok");
+  if (level === "warn") angleFeedbackEl.classList.add("warn");
+  if (level === "bad") angleFeedbackEl.classList.add("bad");
+}
+
+function setSpeedFeedback(text, level = "ok") {
+  speedFeedbackEl.textContent = text;
+  speedFeedbackEl.className = "";
+  if (level === "ok") speedFeedbackEl.classList.add("ok");
+  if (level === "warn") speedFeedbackEl.classList.add("warn");
+  if (level === "bad") speedFeedbackEl.classList.add("bad");
 }
 
 async function setupCamera() {
@@ -186,7 +195,8 @@ function updateLogic(pose) {
       extendStartTime = nowSec;
       maxAngleThisRep = angle;
       angleDisplay.textContent = "Angle: --°";
-      setFeedback("Extending... straighten your knee.", "ok");
+      setAngleFeedback("Extending... straighten your knee.", "ok");
+      setSpeedFeedback("", "ok");
       break;
 
     case "EXTENDING":
@@ -200,11 +210,11 @@ function updateLogic(pose) {
         angleDisplay.textContent = `Max Angle: ${maxAngleThisRep.toFixed(1)}°`;
         // ROM feedback at the top
         if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
-          setFeedback("Great extension! Now lower with control.", "ok");
+          setAngleFeedback("Great extension! Now lower with control.", "ok");
         } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
-          setFeedback("Almost straight. Try a bit more next time.", "warn");
+          setAngleFeedback("Almost straight. Try a bit more next time.", "warn");
         } else {
-          setFeedback("Too shallow. Straighten your leg more.", "bad");
+          setAngleFeedback("Too shallow. Straighten your leg more.", "bad");
         }
       }
       break;
@@ -222,28 +232,33 @@ function updateLogic(pose) {
 
         // speed feedback based on duration
         if (totalTime < MIN_REP_TIME || extendTime < MIN_PHASE_TIME || flexTime < MIN_PHASE_TIME) {
-          setFeedback(
+          setSpeedFeedback(
             `Rep ${repCount}: Too fast. Slow down your movement.`,
             "bad"
           );
         } else {
-          // combine with ROM evaluation
-          if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
-            setFeedback(
-              `Rep ${repCount}: Nice rep! Good extension and control.`,
-              "ok"
-            );
-          } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
-            setFeedback(
-              `Rep ${repCount}: Control is good. Try to extend a bit further.`,
-              "warn"
-            );
-          } else {
-            setFeedback(
-              `Rep ${repCount}: Slow enough, but extend more before coming back.`,
-              "warn"
-            );
-          }
+          setSpeedFeedback(
+            `Rep ${repCount}: Good tempo and control.`,
+            "ok"
+          );
+        }
+
+        // ROM feedback summary
+        if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
+          setAngleFeedback(
+            `Rep ${repCount}: Excellent extension!`,
+            "ok"
+          );
+        } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
+          setAngleFeedback(
+            `Rep ${repCount}: Good, try to extend a bit further.`,
+            "warn"
+          );
+        } else {
+          setAngleFeedback(
+            `Rep ${repCount}: Extend your leg more.`,
+            "bad"
+          );
         }
 
         // reset for next rep
@@ -272,7 +287,7 @@ async function main() {
   };
   detector = await poseDetection.createDetector(model, detectorConfig);
 
-  setFeedback("Model ready. Sit sideways and start extending your right leg.", "ok");
+  setAngleFeedback("Model ready. Sit sideways and start extending your right leg.", "ok");
 
   async function renderLoop() {
     const poses = await detector.estimatePoses(video, {
@@ -294,5 +309,5 @@ async function main() {
 main().catch(err => {
   console.error(err);
   angleDisplay.textContent = "Error: " + err.message;
-  setFeedback("Error: " + err.message, "bad");
+  setAngleFeedback("Error: " + err.message, "bad");
 });
