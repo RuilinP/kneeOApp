@@ -24,14 +24,16 @@ const MAX_GAP_SEC = 0.3; // reuse last good keypoint up to 0.3 s
 
 // ---- rep detection & feedback thresholds ----
 const BENT_THRESHOLD = 110;      // <= this = bent
-const STRAIGHT_TARGET = 165;     // desired max angle for full extension
+let STRAIGHT_TARGET = null;      // personalized target based on first 3 reps
 const ANGLE_OK_MARGIN = 5;       // within 5° of target = perfect
 const MIN_REP_TIME = 5;        // total rep time (s) bent→straight→bent
 const MIN_PHASE_TIME = 2;      // min extend/flex duration (s)
+const CALIBRATION_REPS = 3;    // number of reps to calibrate personalized target
 
 // state machine: BENT -> EXTENDING -> FLEXING -> BENT
 let state = "BENT";
 let repCount = 0;
+let maxAnglesCalibration = [];  // track max angles from first 3 reps
 
 let repStartTime = null;
 let extendStartTime = null;
@@ -208,13 +210,17 @@ function updateLogic(pose) {
         state = "FLEXING";
         flexStartTime = nowSec;
         angleDisplay.textContent = `Max Angle: ${maxAngleThisRep.toFixed(1)}°`;
-        // ROM feedback at the top
-        if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
-          setAngleFeedback("Great extension! Now lower with control.", "ok");
-        } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
-          setAngleFeedback("Almost straight. Try a bit more next time.", "warn");
+        // ROM feedback at the top (only after calibration)
+        if (repCount < CALIBRATION_REPS) {
+          setAngleFeedback("Calibrating... lower with control.", "ok");
         } else {
-          setAngleFeedback("Too shallow. Straighten your leg more.", "bad");
+          if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
+            setAngleFeedback("Great extension! Now lower with control.", "ok");
+          } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
+            setAngleFeedback("Almost straight. Try a bit more next time.", "warn");
+          } else {
+            setAngleFeedback("Too shallow. Straighten your leg more.", "bad");
+          }
         }
       }
       break;
@@ -230,35 +236,54 @@ function updateLogic(pose) {
         repCount += 1;
         repInfo.textContent = `Reps: ${repCount}`;
 
-        // speed feedback based on duration
-        if (totalTime < MIN_REP_TIME || extendTime < MIN_PHASE_TIME || flexTime < MIN_PHASE_TIME) {
-          setSpeedFeedback(
-            `Rep ${repCount}: Too fast. Slow down your movement.`,
-            "bad"
-          );
-        } else {
-          setSpeedFeedback(
-            `Rep ${repCount}: Good tempo and control.`,
-            "ok"
-          );
+        // Calibration phase: collect max angles from first 3 reps
+        if (repCount <= CALIBRATION_REPS) {
+          maxAnglesCalibration.push(maxAngleThisRep);
+          
+          if (repCount < CALIBRATION_REPS) {
+            setAngleFeedback(`Calibration Rep ${repCount}/${CALIBRATION_REPS} - Max: ${maxAngleThisRep.toFixed(1)}°`, "ok");
+          } else {
+            // Calculate STRAIGHT_TARGET as the maximum angle achieved
+            STRAIGHT_TARGET = Math.max(...maxAnglesCalibration);
+            setAngleFeedback(
+              `Calibration complete! Your target: ${STRAIGHT_TARGET.toFixed(1)}°`,
+              "ok"
+            );
+          }
         }
 
-        // ROM feedback summary
-        if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
-          setAngleFeedback(
-            `Rep ${repCount}: Excellent extension!`,
-            "ok"
-          );
-        } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
-          setAngleFeedback(
-            `Rep ${repCount}: Good, try to extend a bit further.`,
-            "warn"
-          );
-        } else {
-          setAngleFeedback(
-            `Rep ${repCount}: Extend your leg more.`,
-            "bad"
-          );
+        // Only provide feedback after calibration
+        if (repCount > CALIBRATION_REPS) {
+          // speed feedback based on duration
+          if (totalTime < MIN_REP_TIME || extendTime < MIN_PHASE_TIME || flexTime < MIN_PHASE_TIME) {
+            setSpeedFeedback(
+              `Rep ${repCount}: Too fast. Slow down your movement.`,
+              "bad"
+            );
+          } else {
+            setSpeedFeedback(
+              `Rep ${repCount}: Good tempo and control.`,
+              "ok"
+            );
+          }
+
+          // ROM feedback summary
+          if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
+            setAngleFeedback(
+              `Rep ${repCount}: Excellent extension!`,
+              "ok"
+            );
+          } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
+            setAngleFeedback(
+              `Rep ${repCount}: Good, try to extend a bit further.`,
+              "warn"
+            );
+          } else {
+            setAngleFeedback(
+              `Rep ${repCount}: Extend your leg more.`,
+              "bad"
+            );
+          }
         }
 
         // reset for next rep
@@ -287,7 +312,7 @@ async function main() {
   };
   detector = await poseDetection.createDetector(model, detectorConfig);
 
-  setAngleFeedback("Model ready. Sit sideways and start extending your right leg.", "ok");
+  setAngleFeedback("Model ready. Do 3 calibration reps to set your personalized target.", "ok");
 
   async function renderLoop() {
     const poses = await detector.estimatePoses(video, {
