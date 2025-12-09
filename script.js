@@ -3,6 +3,7 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const angleDisplay = document.getElementById("angleDisplay");
 const repInfo = document.getElementById("repInfo");
+const calibrationMessageEl = document.getElementById("calibrationMessage");
 const angleFeedbackEl = document.getElementById("angleFeedback");
 const speedFeedbackEl = document.getElementById("speedFeedback");
 
@@ -245,10 +246,8 @@ function updateLogic(pose) {
           } else {
             // Calculate STRAIGHT_TARGET as the maximum angle achieved
             STRAIGHT_TARGET = Math.max(...maxAnglesCalibration);
-            setAngleFeedback(
-              `Calibration complete! Your target: ${STRAIGHT_TARGET.toFixed(1)}°`,
-              "ok"
-            );
+            calibrationMessageEl.textContent = `Calibration complete! Your target: ${STRAIGHT_TARGET.toFixed(1)}°`;
+            calibrationMessageEl.className = "ok";
           }
         }
 
