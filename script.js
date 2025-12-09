@@ -10,6 +10,13 @@ const speedFeedbackEl = document.getElementById("speedFeedback");
 let detector = null;
 let currentPose = null;
 
+// ---- audio feedback ----
+const audioFeedback = {
+  great: new Audio("great.mp3"),
+  almost: new Audio("almost.mp3"),
+  shallow: new Audio("shallow.mp3")
+};
+
 // ---- smoothing for angle ----
 let smoothedAngle = null;
 const SMOOTHING_ALPHA = 0.3;
@@ -217,10 +224,16 @@ function updateLogic(pose) {
         } else {
           if (maxAngleThisRep >= STRAIGHT_TARGET - ANGLE_OK_MARGIN) {
             setAngleFeedback("Great extension! Now lower with control.", "ok");
+            audioFeedback.great.currentTime = 0;
+            audioFeedback.great.play().catch(() => {});
           } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
             setAngleFeedback("Almost straight. Try a bit more next time.", "warn");
+            audioFeedback.almost.currentTime = 0;
+            audioFeedback.almost.play().catch(() => {});
           } else {
             setAngleFeedback("Too shallow. Straighten your leg more.", "bad");
+            audioFeedback.shallow.currentTime = 0;
+            audioFeedback.shallow.play().catch(() => {});
           }
         }
       }
@@ -272,16 +285,22 @@ function updateLogic(pose) {
               `Rep ${repCount}: Excellent extension!`,
               "ok"
             );
+            audioFeedback.great.currentTime = 0;
+            audioFeedback.great.play().catch(() => {});
           } else if (maxAngleThisRep >= STRAIGHT_TARGET - 20) {
             setAngleFeedback(
               `Rep ${repCount}: Good, try to extend a bit further.`,
               "warn"
             );
+            audioFeedback.almost.currentTime = 0;
+            audioFeedback.almost.play().catch(() => {});
           } else {
             setAngleFeedback(
               `Rep ${repCount}: Extend your leg more.`,
               "bad"
             );
+            audioFeedback.shallow.currentTime = 0;
+            audioFeedback.shallow.play().catch(() => {});
           }
         }
 
